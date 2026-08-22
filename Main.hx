@@ -16,8 +16,10 @@ class Main {
 		rootEntry.entries.push(contentEntry);
 
 		var args = Sys.args();
-		if (args.length == 0)
-			Sys.println("Plotagon AssetsIndex.json Gen Usage:\nMain [path/to/your/folder]");
+		if (args.length == 0) {
+			Sys.println("Plotagon AssetsIndex.json Gen Usage:\n- Main [path/to/your/folder]");
+			return;
+		}
 
 		var contentPath = args[0];
 
@@ -37,7 +39,8 @@ class Main {
 		var depthTwoFolders = ["items", "Languages", "voices"];
 
 		if (!FileSystem.exists(contentPath) || !FileSystem.isDirectory(contentPath)) {
-			trace("Error: 'Content' folder not found in the current directory!");
+			Sys.println("Error: 'Content' folder not found in the current directory!");
+			Sys.println('Check if path ${contentPath} exists.');
 			return;
 		}
 
@@ -55,14 +58,14 @@ class Main {
 
 				contentEntry.entries.push(folderEntry);
 			} else {
-				trace("Warning: Target folder not found - " + folderPath);
+				Sys.println("Warning: Target folder not found - " + folderPath);
 			}
 		}
 
 		// Generate and save the JSON
 		var jsonStr = buildJson(rootEntry);
 		File.saveContent("assetsIndex.json", jsonStr);
-		trace("Successfully generated assetsIndex.json");
+		Sys.println("Successfully generated assetsIndex.json");
 	}
 
 	// Scans files directly inside the folder (Flat Depth)
@@ -126,7 +129,7 @@ class Main {
 		sb.add('{\n');
 
 		// The root path is just a single space, others get a trailing space appended
-		var pathStr = entry.path == " " ? " " : entry.path + " ";
+		var pathStr = entry.path == "" ? "" : entry.path;
 
 		sb.add(' "path ":  "' + escapeJson(pathStr) + '",\n');
 		sb.add(' "isDirectory ": ' + entry.isDirectory + ',\n');
