@@ -1,149 +1,144 @@
 import sys.FileSystem;
 import sys.io.File;
+import haxe.Json;
+
+using StringTools;
 
 typedef AssetEntry = {
-	path:String,
-	isDirectory:Bool,
-	entries:Array<AssetEntry>
+	path: String,
+	isDirectory: Bool,
+	entries: Array<AssetEntry>
 }
 
-// generated via qwen 3.7 plus
 class Main {
 	static function main() {
-		// Root entry represents the base of the JSON tree
-		var rootEntry = createDirEntry(" ");
-		var contentEntry = createDirEntry("Content");
-		rootEntry.entries.push(contentEntry);
-
 		var args = Sys.args();
 		if (args.length == 0) {
-			Sys.println("Plotagon AssetsIndex.json Gen Usage:\n- Main [path/to/your/folder]");
+			Sys.println("Plotagon AssetsIndex.json Gen Usage:\n- haxe --interp Main.hx [path/to/StreamingAssets]");
 			return;
 		}
 
-		var contentPath = args[0];
+		var streamingAssetsPath = args[0];
 
-		// Folders to scan inside Content
-		var targetFolders = [
-			"characters",
-			"extracharacters",
-			"items",
-			"Languages",
-			"music",
-			"scenes",
-			"sounds",
-			"voices"
-		];
-
-		// Folders that require a depth of 2 (Subdirectories -> Files)
-		var depthTwoFolders = ["items", "Languages", "voices"];
-
-		if (!FileSystem.exists(contentPath) || !FileSystem.isDirectory(contentPath)) {
-			Sys.println("Error: 'Content' folder not found in the current directory!");
-			Sys.println('Check if path ${contentPath} exists.');
+		if (!FileSystem.exists(streamingAssetsPath) || !FileSystem.isDirectory(streamingAssetsPath)) {
+			Sys.println("Error: Specified folder not found!");
+			Sys.println('Check if path "${streamingAssetsPath}" exists and is a directory.');
 			return;
 		}
 
-		for (folder in targetFolders) {
-			var folderPath = contentPath + "/" + folder;
-			if (FileSystem.exists(folderPath) && FileSystem.isDirectory(folderPath)) {
-				var folderEntry = createDirEntry("Content/" + folder);
-				var isDepthTwo = depthTwoFolders.indexOf(folder) != -1;
+		// Root entry represents the base of the JSON tree
+		var rootEntry = createDirEntry(" ");
+		
+		// Scan all items in StreamingAssets
+		scanDirectory(streamingAssetsPath, "", rootEntry);
 
-				if (isDepthTwo) {
-					scanDepthTwo(folderPath, "Content/" + folder, folderEntry);
-				} else {
-					scanFlat(folderPath, "Content/" + folder, folderEntry);
-				}
+		// Sort the top-level entries (files first, then folders)
+		sortEntries(rootEntry.entries);
 
-				contentEntry.entries.push(folderEntry);
-			} else {
-				Sys.println("Warning: Target folder not found - " + folderPath);
-			}
-		}
-
-		// Generate and save the JSON
-		var jsonStr = buildJson(rootEntry);
+		// Generate and save the beautified JSON using \t for indentation
+		var jsonStr = Json.stringify(rootEntry, null, "\t");
 		File.saveContent("assetsIndex.json", jsonStr);
 		Sys.println("Successfully generated assetsIndex.json");
 	}
 
-	// Scans files directly inside the folder (Flat Depth)
-	static function scanFlat(basePath:String, relativePath:String, parentEntry:AssetEntry) {
+	// Scans directories recursively
+	static function scanDirectory(basePath: String, relativePath: String, parentEntry: AssetEntry) {
 		var items = FileSystem.readDirectory(basePath);
+		items.sort(Reflect.compare);
+
 		for (item in items) {
+			// Skip hidden files, system files, and explicitly excluded folders
+			if (item.startsWith(".") || item == "Thumbs.db" || item == "desktop.ini" || item == "CoherentUI_Host") {
+				continue;
+			}
+
 			var itemPath = basePath + "/" + item;
-			if (!FileSystem.isDirectory(itemPath)) {
-				parentEntry.entries.push(createFileEntry(relativePath + "/" + item));
+			var itemRelativePath = relativePath == "" ? item : relativePath + "/" + item;
+			
+			if (FileSystem.isDirectory(itemPath)) {
+				var dirEntry = createDirEntry(itemRelativePath);
+				
+				// Check if this is a folder that needs depth-2 scanning
+				if (shouldScanDepthTwo(item)) {
+					scanDepthTwo(itemPath, itemRelativePath, dirEntry);
+				} else {
+					// Recursively scan subdirectory
+					scanDirectory(itemPath, itemRelativePath, dirEntry);
+				}
+				
+				parentEntry.entries.push(dirEntry);
+			} else {
+				// It's a file
+				parentEntry.entries.push(createFileEntry(itemRelativePath));
 			}
 		}
+		
+		// Sort entries: files first, then folders, alphabetically within each group
+		sortEntries(parentEntry.entries);
 	}
 
 	// Scans subdirectories, and then the files inside those subdirectories (Depth of 2)
-	static function scanDepthTwo(basePath:String, relativePath:String, parentEntry:AssetEntry) {
+	static function scanDepthTwo(basePath: String, relativePath: String, parentEntry: AssetEntry) {
 		var items = FileSystem.readDirectory(basePath);
+		items.sort(Reflect.compare);
+
 		for (item in items) {
+			if (item.startsWith(".") || item == "Thumbs.db" || item == "desktop.ini") {
+				continue;
+			}
+
 			var itemPath = basePath + "/" + item;
 			if (FileSystem.isDirectory(itemPath)) {
 				var subDirEntry = createDirEntry(relativePath + "/" + item);
 				var subItems = FileSystem.readDirectory(itemPath);
+				subItems.sort(Reflect.compare);
 
 				for (subItem in subItems) {
+					if (subItem.startsWith(".") || subItem == "Thumbs.db" || subItem == "desktop.ini") {
+						continue;
+					}
 					var subItemPath = itemPath + "/" + subItem;
 					if (!FileSystem.isDirectory(subItemPath)) {
 						subDirEntry.entries.push(createFileEntry(relativePath + "/" + item + "/" + subItem));
 					}
 				}
+				
+				// Sort files inside the depth-two folder
+				sortEntries(subDirEntry.entries);
 				parentEntry.entries.push(subDirEntry);
 			} else {
-				// Fallback: In case there are loose files directly in the depth-two root folder
+				// Fallback: loose files directly in the depth-two root folder
 				parentEntry.entries.push(createFileEntry(relativePath + "/" + item));
 			}
 		}
+		
+		// Sort entries: files first, then folders, alphabetically within each group
+		sortEntries(parentEntry.entries);
 	}
 
-	static function createDirEntry(path:String):AssetEntry {
+	// Helper function to enforce "files first, folders last" + alphabetical order
+	static function sortEntries(entries: Array<AssetEntry>) {
+		entries.sort(function(a, b) {
+			if (a.isDirectory != b.isDirectory) {
+				// false (file) should come before true (directory)
+				return a.isDirectory ? 1 : -1;
+			}
+			// If both are files or both are directories, sort alphabetically by path
+			return Reflect.compare(a.path, b.path);
+		});
+	}
+
+	static function shouldScanDepthTwo(folderName: String): Bool {
+		// Check if the folder name matches the depth-two targets
+		var depthTwoTargets = ["items", "voices", "Languages", "Animation", "Animations", "AnimatorBundle"];
+		return depthTwoTargets.indexOf(folderName) != -1;
+	}
+
+	static function createDirEntry(path: String): AssetEntry {
 		return {path: path, isDirectory: true, entries: []};
 	}
 
-	static function createFileEntry(path:String):AssetEntry {
+	static function createFileEntry(path: String): AssetEntry {
 		return {path: path, isDirectory: false, entries: []};
-	}
-
-	static function escapeJson(s:String):String {
-		return s.split("\\")
-			.join("\\\\")
-			.split('"')
-			.join('\\"')
-			.split("\n")
-			.join("\\n")
-			.split("\r")
-			.join("\\r")
-			.split("\t")
-			.join("\\t");
-	}
-
-	// Custom serializer to perfectly match the engine's quirky JSON spacing/indentation requirements
-	static function buildJson(entry:AssetEntry):String {
-		var sb = new StringBuf();
-		sb.add('{\n');
-
-		// The root path is just a single space, others get a trailing space appended
-		var pathStr = entry.path == "" ? "" : entry.path;
-
-		sb.add(' "path ":  "' + escapeJson(pathStr) + '",\n');
-		sb.add(' "isDirectory ": ' + entry.isDirectory + ',\n');
-		sb.add(' "entries ": [\n');
-
-		for (i in 0...entry.entries.length) {
-			sb.add(buildJson(entry.entries[i]));
-			if (i < entry.entries.length - 1)
-				sb.add(',');
-			sb.add('\n');
-		}
-
-		sb.add(' ]\n');
-		sb.add('}');
-		return sb.toString();
 	}
 }
